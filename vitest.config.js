@@ -1,8 +1,7 @@
-import { loadEnvFile } from "node:process";
 import { defineConfig } from "vitest/config";
 
-export default defineConfig(() => ({
+export default defineConfig({
   test: {
-    env: loadEnvFile(),
+    environment: "node",
   },
-}));
+});

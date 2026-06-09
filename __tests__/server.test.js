@@ -10,16 +10,55 @@ import {
   test,
 } from "vitest";
 
-import app from "#app";
-import db from "#db/client";
+import app from "../server/app.js";
+import { pool } from "../db/index.js";
 
+/* -------------------------------------------
+   SEED DATABASE BEFORE ALL TESTS
+-------------------------------------------- */
 beforeAll(async () => {
-  await db.connect();
-});
-afterAll(async () => {
-  await db.end();
+  // Clear tables in correct FK order
+  await pool.query("DELETE FROM playlists_tracks;");
+  await pool.query("DELETE FROM playlists;");
+  await pool.query("DELETE FROM tracks;");
+
+  // Reset sequences so IDs start at 1 again
+  await pool.query("ALTER SEQUENCE tracks_id_seq RESTART WITH 1;");
+  await pool.query("ALTER SEQUENCE playlists_id_seq RESTART WITH 1;");
+
+  // Insert 20 tracks
+  await pool.query(`
+    INSERT INTO tracks (name, duration_ms)
+    SELECT 'Track ' || i, 200000
+    FROM generate_series(1, 20) AS i;
+  `);
+
+  // Insert 10 playlists
+  await pool.query(`
+    INSERT INTO playlists (name, description)
+    SELECT 'Playlist ' || i, 'Description ' || i
+    FROM generate_series(1, 10) AS i;
+  `);
+
+  // Insert playlist-track relationships
+  await pool.query(`
+    INSERT INTO playlists_tracks (playlist_id, track_id)
+    VALUES 
+      (1, 1),
+      (1, 2),
+      (1, 3),
+      (2, 1),
+      (2, 4);
+  `);
 });
 
+afterAll(async () => {
+  await pool.end();
+});
+
+/* -------------------------------------------
+   TRACKS ROUTER TESTS
+-------------------------------------------- */
 describe("/tracks router", () => {
   const expectedTrack = expect.objectContaining({
     name: expect.any(String),
@@ -55,6 +94,9 @@ describe("/tracks router", () => {
   });
 });
 
+/* -------------------------------------------
+   PLAYLISTS ROUTER TESTS
+-------------------------------------------- */
 describe("/playlists router", () => {
   const expectedPlaylist = expect.objectContaining({
     name: expect.any(String),
@@ -71,10 +113,10 @@ describe("/playlists router", () => {
 
   describe("POST /playlists", () => {
     beforeEach(async () => {
-      await db.query("BEGIN");
+      await pool.query("BEGIN");
     });
     afterEach(async () => {
-      await db.query("ROLLBACK");
+      await pool.query("ROLLBACK");
     });
 
     it("creates a new playlist", async () => {
@@ -122,7 +164,7 @@ describe("/playlists router", () => {
     it("sends all tracks in the playlist", async () => {
       const response = await request(app).get("/playlists/1/tracks");
       expect(response.status).toBe(200);
-      expect(response.body.length).toBeGreaterThanOrEqual(0);
+      expect(response.body.length).toBeGreaterThanOrEqual(1);
     });
 
     it("sends 404 if playlist does not exist", async () => {
@@ -138,10 +180,10 @@ describe("/playlists router", () => {
 
   describe("POST /playlists/:id/tracks", () => {
     beforeEach(async () => {
-      await db.query("BEGIN");
+      await pool.query("BEGIN");
     });
     afterEach(async () => {
-      await db.query("ROLLBACK");
+      await pool.query("ROLLBACK");
     });
 
     it("sends 400 if request body is missing", async () => {
@@ -183,7 +225,6 @@ describe("/playlists router", () => {
     });
 
     it("creates a new playlist_track", async () => {
-      // Create new playlist to ensure no conflicts
       const playlist = (
         await request(app).post("/playlists").send({
           name: "New Playlist",
@@ -196,6 +237,7 @@ describe("/playlists router", () => {
         .send({
           trackId: 1,
         });
+
       expect(response.status).toBe(201);
       expect(response.body).toEqual(
         expect.objectContaining({
@@ -207,7 +249,6 @@ describe("/playlists router", () => {
     });
 
     it("sends 400 if track is already in playlist", async () => {
-      // Create new playlist and add track twice to ensure conflict
       const playlist = (
         await request(app).post("/playlists").send({
           name: "New Playlist",
